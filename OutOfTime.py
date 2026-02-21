@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+from plyer import notification
 import subprocess
 import sys
 import time
@@ -27,7 +28,7 @@ def close_process(process_name: str) -> bool:
     else:
         ###TODO, check this works, it should kill all processes with the given name
         logger.debug("Attempting to kill process '%s' on Windows system", process_name)
-    return subprocess.run(['taskkill', '/IM', process_name], capture_output=True, text=True).returncode == 0
+        return subprocess.run(['taskkill', '/IM', process_name], capture_output=True, text=True).returncode == 0
 
 
 def init_logger(level_string: str) -> logging.Logger:
@@ -61,21 +62,44 @@ def parse_args() -> argparse.Namespace:
                         help="Length of time in which the program is allowed to run, in seconds",
                         type=int,
                         default=3600)
+    parser.add_argument('--remind', '-r',
+                        help="The amount of time left until timeout in which a notification should be displayed, in seconds",
+                        type=int,
+                        default=300)
     return parser.parse_args()
 
 
-def loop(target: str, run_limit_s: int, interval_s: int = 10):
+def notify(title:str, message:str, timeout_s: int = 10) -> None:
+    logger.debug("Sending notification: %s", message)
+    notification.notify(
+        app_name='OutOfTime',
+        title=title,
+        message=message,
+        timeout=timeout_s
+    )
+
+
+def loop(target: str, run_limit_s: int, remind_time_s: int, interval_s: int = 10) -> None:
     global runtime_s
+    global warning_sent
+
     is_running: bool = check_if_process_running(target)
 
     if runtime_s >= run_limit_s and is_running:
         logger.info("Runtime limit of %d seconds reached. Attempting to close process '%s'.", run_limit_s, target)
+        notify("Process Timeout", f"Process '{target}' has reached the runtime limit of {run_limit_s} seconds and will be closed.")
         if close_process(target):
             logger.info("Process '%s' closed successfully.", target)
         else:
             logger.warning(
                 "Failed to close process '%s'. It may not be running or there may be insufficient permissions.", target)
         return
+    elif is_running and runtime_s >= (run_limit_s - remind_time_s):
+        time_left_s: int = run_limit_s - runtime_s
+        logger.info("Process '%s' is running and approaching runtime limit. Time left: %d seconds.", target, time_left_s)
+        if not warning_sent:
+            notify('Process Runtime Warning', f"Process '{target}' has been running for {runtime_s} seconds. Time left until timeout: {time_left_s} seconds.")
+            warning_sent = True
 
     if is_running:
         logger.info("Process '%s' is running.", target)
@@ -91,15 +115,18 @@ def loop(target: str, run_limit_s: int, interval_s: int = 10):
 
 global logger
 runtime_s = 0
+warning_sent = False
+
 if __name__ == "__main__":
     args: argparse.Namespace = parse_args()
     logger: logging.Logger = init_logger(args.log_level)
 
     logger.debug('Parsed arguments: %s', args)
     logger.info('Starting process monitoring for: %s', args.target)
+    notify("Process Monitor Started", f"Monitoring process '{args.target}' with a timeout of {args.timeout} seconds.")
     try:
         while True:
-            loop(args.target, args.timeout, interval_s=args.interval)
+            loop(args.target, args.timeout, args.remind, interval_s=args.interval)
     except KeyboardInterrupt:
         logger.info('Received Manual Interrupt - Stopping process monitoring for: %s', args.target)
         sys.exit(0)
