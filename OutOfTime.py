@@ -79,6 +79,24 @@ def notify(title:str, message:str, timeout_s: int = 10) -> None:
     )
 
 
+def handle_timeout(target: str, run_limit_s: int) -> None:
+    logger.info("Runtime limit of %d seconds reached. Attempting to close process '%s'.", run_limit_s, target)
+    notify("Process Timeout", f"Process '{target}' has reached the runtime limit of {run_limit_s} seconds and will be closed.")
+    if close_process(target):
+        logger.info("Process '%s' closed successfully.", target)
+    else:
+        logger.warning("Failed to close process '%s'. It may not be running or there may be insufficient permissions.", target)
+
+
+def handle_reminder(target: str, run_limit_s: int) -> None:
+    global warning_sent
+    time_left_s: int = run_limit_s - runtime_s
+    logger.info("Process '%s' is running and approaching runtime limit. Time left: %d seconds.", target, time_left_s)
+    if not warning_sent:
+        notify('Process Runtime Warning', f"Process '{target}' has been running for {runtime_s} seconds. Time left until timeout: {time_left_s} seconds.")
+        warning_sent = True
+
+
 def loop(target: str, run_limit_s: int, remind_time_s: int, interval_s: int = 10) -> None:
     global runtime_s
     global warning_sent
@@ -86,20 +104,10 @@ def loop(target: str, run_limit_s: int, remind_time_s: int, interval_s: int = 10
     is_running: bool = check_if_process_running(target)
 
     if runtime_s >= run_limit_s and is_running:
-        logger.info("Runtime limit of %d seconds reached. Attempting to close process '%s'.", run_limit_s, target)
-        notify("Process Timeout", f"Process '{target}' has reached the runtime limit of {run_limit_s} seconds and will be closed.")
-        if close_process(target):
-            logger.info("Process '%s' closed successfully.", target)
-        else:
-            logger.warning(
-                "Failed to close process '%s'. It may not be running or there may be insufficient permissions.", target)
+        handle_timeout(target, run_limit_s)
         return
     elif is_running and runtime_s >= (run_limit_s - remind_time_s):
-        time_left_s: int = run_limit_s - runtime_s
-        logger.info("Process '%s' is running and approaching runtime limit. Time left: %d seconds.", target, time_left_s)
-        if not warning_sent:
-            notify('Process Runtime Warning', f"Process '{target}' has been running for {runtime_s} seconds. Time left until timeout: {time_left_s} seconds.")
-            warning_sent = True
+        handle_reminder(target, run_limit_s)
 
     if is_running:
         logger.info("Process '%s' is running.", target)
