@@ -27,7 +27,7 @@ def close_process(process_name: str) -> bool:
     return subprocess.run(['taskkill', '/IM', process_name], capture_output=True, text=True).returncode == 0
 
 def init_logger(level_string: str) -> logging.Logger:
-    level = logging.getLevelNamesMapping().get(level_string.upper(), logging.INFO)
+    level: int = logging.getLevelNamesMapping().get(level_string.upper(), logging.INFO)
 
     logging.basicConfig(
         level=level,
@@ -35,12 +35,12 @@ def init_logger(level_string: str) -> logging.Logger:
         handlers=[logging.StreamHandler(sys.stdout)],
 
     )
-    new_logger = logging.getLogger('OutOfTime')
+    new_logger: logging.Logger = logging.getLogger('OutOfTime')
     new_logger.debug('Initialized logger with level: %s', level_string)
     return new_logger
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Check and close a process by name.")
+def parse_args() -> argparse.Namespace:
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(description="Check and close a process by name.")
     parser.add_argument('target',
                         help="Name of the process to check/close",
                         default=None)
@@ -65,8 +65,8 @@ def loop(target: str, interval_s: int = 10) -> None:
 
 global logger
 if __name__ == "__main__":
-    args = parse_args()
-    logger = init_logger(args.log_level)
+    args: argparse.Namespace = parse_args()
+    logger: logging.Logger = init_logger(args.log_level)
 
     logger.debug('Parsed arguments: %s', args)
     logger.info('Starting process monitoring for: %s', args.target)
