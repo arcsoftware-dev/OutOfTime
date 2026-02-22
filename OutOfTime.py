@@ -5,6 +5,7 @@ from plyer import notification
 import subprocess
 import sys
 import time
+import threading
 
 
 def is_unix_like() -> bool:
@@ -14,7 +15,7 @@ def is_unix_like() -> bool:
 def check_if_process_running(process_name: str) -> bool:
     if is_unix_like():
         logger.debug("Checking if process '%s' is running on Unix-like system", process_name)
-        return subprocess.run(['pgrep', '-x', 'ping'], capture_output=True, text=True).returncode == 0
+        return subprocess.run(['pgrep', '-x', process_name], capture_output=True, text=True).returncode == 0
     else:
         ###TODO, check this works, it should check if a process is running with the given name
         logger.debug("Checking if process '%s' is running on Windows system", process_name)
@@ -124,6 +125,100 @@ def loop(target: str, run_limit_s: int, remind_time_s: int, interval_s: int = 10
 global logger
 runtime_s = 0
 warning_sent = False
+
+# Threading / programmatic monitor state
+_monitor_thread = None
+_stop_event: threading.Event | None = None
+_monitor_lock = threading.Lock()
+
+
+def run_monitor(stop_event: threading.Event, target: str, run_limit_s: int, remind_time_s: int, interval_s: float = 10.0, log_level: str = 'INFO') -> None:
+    """
+    Blocking monitor loop suitable to run in a background thread. Exits when stop_event is set.
+    """
+    global logger, runtime_s, warning_sent
+    logger = init_logger(log_level)
+    runtime_s = 0
+    warning_sent = False
+
+    logger.info('Starting threaded monitor for: %s', target)
+    notify("Process Monitor Started", f"Monitoring process '{target}' with a timeout of {run_limit_s} seconds.")
+
+    try:
+        while not stop_event.is_set():
+            # perform one monitoring step (mirrors loop behaviour)
+            is_running: bool = check_if_process_running(target)
+
+            if runtime_s >= run_limit_s and is_running:
+                handle_timeout(target, run_limit_s)
+                return
+            elif is_running and runtime_s >= (run_limit_s - remind_time_s):
+                handle_reminder(target, run_limit_s)
+
+            if is_running:
+                logger.info("Process '%s' is running.", target)
+                runtime_s = runtime_s + interval_s
+            else:
+                logger.info("Process '%s' is not running.", target)
+
+            logger.debug("Waiting for %s seconds or until stop event", interval_s)
+            # wait returns True if event set during wait
+            stop_event.wait(interval_s)
+
+            logger.info("Total runtime: %d seconds", runtime_s)
+
+    except Exception as e:
+        logger.exception('Unhandled exception in monitor thread: %s', e)
+        notify('Monitor Error', f'An error occurred in the monitor: {e}')
+
+    logger.info('Monitor stopped for: %s', target)
+
+
+def start_monitor(target: str, timeout: int = 3600, interval: float = 10.0, remind: int = 300, log_level: str = 'INFO') -> threading.Thread | None:
+    """
+    Start the monitor in a background thread. Returns the Thread object or None if already running or invalid input.
+    """
+    global _monitor_thread, _stop_event, logger
+
+    if not target or not target.strip():
+        raise ValueError('target must be a non-empty process name')
+
+    with _monitor_lock:
+        if _monitor_thread is not None and _monitor_thread.is_alive():
+            logger = init_logger(log_level)
+            logger.warning('Monitor already running')
+            return _monitor_thread
+
+        _stop_event = threading.Event()
+        _monitor_thread = threading.Thread(target=run_monitor, args=(_stop_event, target, timeout, remind, interval, log_level), daemon=False)
+        _monitor_thread.start()
+        return _monitor_thread
+
+
+def stop_monitor(timeout: float = 2.0) -> bool:
+    """
+    Signal the monitor thread to stop and join it. Returns True if stopped cleanly.
+    """
+    global _monitor_thread, _stop_event
+
+    with _monitor_lock:
+        if _monitor_thread is None:
+            return True
+        if _stop_event is None:
+            return True
+
+        _stop_event.set()
+        _monitor_thread.join(timeout=timeout)
+        still_alive = _monitor_thread.is_alive()
+        if still_alive:
+            logger.warning('Monitor thread did not stop within timeout')
+            return False
+
+        _monitor_thread = None
+        _stop_event = None
+        return True
+
+
 
 if __name__ == "__main__":
     args: argparse.Namespace = parse_args()
