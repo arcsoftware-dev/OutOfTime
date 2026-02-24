@@ -2,7 +2,8 @@ import sys
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget,
                                QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
-                               QComboBox, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox)
+                               QComboBox, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox,
+                               QInputDialog)
 
 import OutOfTime
 
@@ -14,6 +15,8 @@ class SettingsWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('OutOfTime Settings')
+
+        self.active_password = None
 
         # Target
         self.target_label = QLabel('Target process name:')
@@ -44,6 +47,11 @@ class SettingsWindow(QWidget):
         self.log_combo.addItems(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
         self.log_combo.setCurrentText('INFO')
 
+        # Password
+        self.password_label = QLabel('Stop Password (optional):')
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
         # Start/Stop buttons
         self.start_button = QPushButton('Start')
         self.stop_button = QPushButton('Stop')
@@ -66,6 +74,9 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.log_label)
         layout.addWidget(self.log_combo)
 
+        layout.addWidget(self.password_label)
+        layout.addWidget(self.password_edit)
+
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self.start_button)
         btn_layout.addWidget(self.stop_button)
@@ -87,6 +98,8 @@ class SettingsWindow(QWidget):
         interval = float(self.interval_spin.value())
         remind = int(self.remind_spin.value())
         log_level = self.log_combo.currentText()
+        
+        self.active_password = self.password_edit.text()
 
         try:
             thread = OutOfTime.start_monitor(target=target, timeout=timeout, interval=interval, remind=remind, log_level=log_level)
@@ -100,13 +113,22 @@ class SettingsWindow(QWidget):
         else:
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
+            self.password_edit.setEnabled(False)
             tray.showMessage('OutOfTime', f'Monitor started for {target}')
 
     def stop_monitor(self):
+        if self.active_password:
+            parent = self if self.isVisible() else None
+            text, ok = QInputDialog.getText(parent, 'Password Required', 'Enter password to stop monitoring:', QLineEdit.EchoMode.Password)
+            if not ok or text != self.active_password:
+                QMessageBox.warning(parent, 'Authentication Failed', 'Incorrect password.')
+                return
+
         ok = OutOfTime.stop_monitor()
         if ok:
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
+            self.password_edit.setEnabled(True)
             tray.showMessage('OutOfTime', 'Monitor stopped')
         else:
             tray.showMessage('OutOfTime', 'Monitor did not stop cleanly')
@@ -133,6 +155,11 @@ stop_action.triggered.connect(settings_window.stop_monitor)
 settings_action.triggered.connect(lambda: settings_window.show())
 
 def quit_app():
+    if settings_window.stop_button.isEnabled() and settings_window.active_password:
+         text, ok = QInputDialog.getText(None, 'Password Required', 'Enter password to quit:', QLineEdit.EchoMode.Password)
+         if not ok or text != settings_window.active_password:
+             return
+
     # Attempt to stop monitor before quitting
     OutOfTime.stop_monitor()
     tray.setVisible(False)
